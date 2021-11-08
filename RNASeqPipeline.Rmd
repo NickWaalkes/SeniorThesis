@@ -1,0 +1,146 @@
+---
+title: "RNASeq Data Generation"
+author: "Nick Waalkes"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("BiocManager")
+BiocManager::install("DESeq2")
+```
+
+```{r}
+library(DESeq2)
+library(onlineFDR)
+library(seqgendiff)
+library(compcodeR)
+
+generateSequentialCountMatrix <- function(numHyp, varNum, diffExp){
+  
+  runningMatrix <- matrix()
+  condList <- c()
+  diffExpression <- c()
+  
+  for (i in 1:numHyp){
+  
+  synthData <- generateSyntheticData(dataset = "B_625_625", n.vars = varNum, 
+                                   samples.per.cond = 5, n.diffexp = diffExp, 
+                                   repl.id = 1, seqdepth = 1e7, 
+                                   fraction.upregulated = 0.5, 
+                                   between.group.diffdisp = FALSE, 
+                                   filter.threshold.total = -1, 
+                                   filter.threshold.mediancpm = -1, 
+                                   fraction.non.overdispersed = 0, 
+                                   output.file = "OutputTestSynth.rds")
+  
+ diffExpression <- c(diffExpression, synthData@variable.annotations$differential.expression)
+  
+  condList <- c(condList, "C","C", "C", "C","C","T","T","T","T","T") 
+  if (i == 1){
+    runningMatrix <- synthData@count.matrix
+  }
+  else{
+     runningMatrix <- cbind(runningMatrix, synthData@count.matrix)
+     
+     
+      
+  }
+ 
+  
+  
+  
+}
+  
+  for (i in 1 : dim(runningMatrix)[2]){
+       colnames(runningMatrix)[i] <- paste("sample", i, sep="")
+     }
+  
+  
+  
+  return(list("countMatrix" = runningMatrix, "sampleCondition" = condList, "diffExpression" = diffExpression))
+ 
+  
+}
+
+
+DESeqPipeline <- function(countMatrix, conditionList) {
+  
+  outputPrefix <- "SyntheticRNAData"
+sampleNames <- colnames(countMatrix)
+colData <- data.frame(condition = conditionList)
+treatments = c("C","T")
+ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, colData = colData, design = ~ condition)
+
+colData(ddsFromMatrix)$condition <- factor(colData(ddsFromMatrix)$condition, levels = treatments)
+
+dds <- DESeq(ddsFromMatrix)
+res <- results(dds)
+
+resData <- merge(as.data.frame(res), as.data.frame(counts(dds,normalized =TRUE)), by = 'row.names', sort = FALSE)
+
+
+
+return(resData)
+}
+
+
+offlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
+adjP <- p.adjust(pValueMatrix, method="BH")
+positives <- 0
+fPositives <- 0
+ 
+
+print(type(adjP[1]))
+
+ for (i in 1:length(adjP)){
+  if (adjP[i])
+   if (adjP[i] < cutoff){
+     positives <- positives + 1
+     if (diffExpMatrix[i] == 0) {
+       fPositives <- fPositives + 1
+     }
+   }
+ }
+
+fdr <- fPositives / positives
+return(fdr)
+}
+
+onlineFDR <- function(pValueMatrix, diff ExpMatrix, cutoff){
+adjP <- SAFFRON(pValueMatrix)
+positives <- 0
+fPositives <- 0
+ 
+
+print(type(adjP[1]))
+
+ for (i in 1:length(adjP)){
+  if (adjP[i])
+   if (adjP[i] < cutoff){
+     positives <- positives + 1
+     if (diffExpMatrix[i] == 0) {
+       fPositives <- fPositives + 1
+     }
+   }
+ }
+
+fdr <- fPositives / positives
+return(fdr)
+}
+
+
+
+```
+
+
+
+```{r}
+syntheticData <- generateSequentialCountMatrix(1, 12500, 1250)
+res <- DESeqPipeline(syntheticData$countMatrix, syntheticData$sampleCondition)
+offlineFDR(res$pvalue, syntheticData$diffExpression, 0.05)
+
+```
