@@ -12,6 +12,7 @@ library(DESeq2)
 library(onlineFDR)
 library(seqgendiff)
 library(compcodeR)
+library(dplyr)
 ```
 
 ```{r simulate_data_fct}
@@ -58,29 +59,28 @@ generateSequentialCountMatrix <- function(numHyp, varNum, diffExp, nSamples = 5)
 }
 ```
 
-```{r}
-
-DESeqPipeline <- function(countMatrix, conditionList) {
+```{r deseq_fct}
+DESeqPipeline <- function(countMatrix, conditions) {
   
-  outputPrefix <- "SyntheticRNAData"
-  sampleNames <- colnames(countMatrix)
-  colData <- data.frame(condition = conditionList)
-  treatments = c("C","T")
-  ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, colData = colData, design = ~ condition)
+  colData <- data.frame(condition = conditions) %>%
+    mutate(condition = as.factor(condition))
   
-  colData(ddsFromMatrix)$condition <- factor(colData(ddsFromMatrix)$condition, levels = treatments)
+  ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, 
+                                          colData = colData, 
+                                          design = ~ condition)
   
   dds <- DESeq(ddsFromMatrix)
   res <- results(dds)
   
-  resData <- merge(as.data.frame(res), as.data.frame(counts(dds,normalized =TRUE)), by = 'row.names', sort = FALSE)
-  
-  
-  
-  return(resData)
+  resData <- merge(as.data.frame(res), as.data.frame(counts(dds, normalized = TRUE)), 
+                   by = 'row.names', 
+                   sort = FALSE)
+
+  resData
 }
+```
 
-
+```{r fdr_fct}
 offlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
   adjP <- p.adjust(pValueMatrix, method="BH")
   positives <- 0
@@ -129,6 +129,6 @@ onlineFDR <- function(pValueMatrix, diff ExpMatrix, cutoff){
 
 ```{r}
 syntheticData <- generateSequentialCountMatrix(1, 1000, 100)
-res <- DESeqPipeline(syntheticData$countMatrix, syntheticData$sampleCondition)
+res <- DESeqPipeline(syntheticData$countMatrix[[1]]@count.matrix, syntheticData$sampleCondition)
 offlineFDR(res$pvalue, syntheticData$diffExpression, 0.05)
 ```
