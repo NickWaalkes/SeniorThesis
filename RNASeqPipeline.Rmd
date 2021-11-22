@@ -81,26 +81,19 @@ DESeqPipeline <- function(countMatrix, conditions) {
 ```
 
 ```{r fdr_fct}
-offlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
-  adjP <- p.adjust(pValueMatrix, method="BH")
-  positives <- 0
-  fPositives <- 0
+control_offlineFDR <- function(pValueVec, diffExpVec, cutoff = 0.05, .method = "BH"){
+  # describe func args
+
+  adjP <- p.adjust(pValueVec, method = .method)
   
-  
-  print(type(adjP[1]))
-  
-  for (i in 1:length(adjP)){
-    if (adjP[i])
-      if (adjP[i] < cutoff){
-        positives <- positives + 1
-        if (diffExpMatrix[i] == 0) {
-          fPositives <- fPositives + 1
-        }
-      }
-  }
-  
-  fdr <- fPositives / positives
-  return(fdr)
+  n_positives <- sum(adjP < cutoff, na.rm = TRUE)
+  n_true_positives <- sum((adjP < cutoff) & diffExpVec, na.rm = TRUE)
+  n_false_positives <- sum((adjP < cutoff) & (diffExpVec == 0), na.rm = TRUE)
+  fdr <- n_false_positives/n_positives
+  tibble(n_positives = n_positives,
+         n_true_positives = n_true_positives,
+         n_false_positives = n_false_positives,
+         fdr = fdr)
 }
 
 onlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
@@ -130,10 +123,16 @@ onlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
 ```{r}
 syntheticData <- generateSequentialCountMatrix(1, 1000, 100)
 res <- DESeqPipeline(syntheticData$countMatrix[[1]]@count.matrix, syntheticData$sampleCondition)
-offlineFDR(res$pvalue, syntheticData$diffExpression, 0.05)
+control_offlineFDR(res$pvalue, syntheticData$diffExpression)
 ```
 
 
 ```{r}
 
 ```
+=======
+You should look into a couple of things:
+
+* Why are there NAs in the res?
+* Why is the FDP 0.087? This is higher than our nominal threshold of 0.05
+
