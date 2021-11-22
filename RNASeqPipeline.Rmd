@@ -103,7 +103,7 @@ offlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
   return(fdr)
 }
 
-onlineFDR <- function(pValueMatrix, diff ExpMatrix, cutoff){
+onlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
   adjP <- SAFFRON(pValueMatrix)
   positives <- 0
   fPositives <- 0
@@ -131,4 +131,9 @@ onlineFDR <- function(pValueMatrix, diff ExpMatrix, cutoff){
 syntheticData <- generateSequentialCountMatrix(1, 1000, 100)
 res <- DESeqPipeline(syntheticData$countMatrix[[1]]@count.matrix, syntheticData$sampleCondition)
 offlineFDR(res$pvalue, syntheticData$diffExpression, 0.05)
+```
+
+
+```{r}
+
 ```
