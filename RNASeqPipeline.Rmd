@@ -6,139 +6,126 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-```
 
-```{r}
-install.packages("BiocManager")
-BiocManager::install("DESeq2")
-```
-
-```{r}
+# Load libraries
 library(DESeq2)
 library(onlineFDR)
 library(seqgendiff)
 library(compcodeR)
+library(dplyr)
+```
 
-generateSequentialCountMatrix <- function(numHyp, varNum, diffExp){
+```{r simulate_data_fct}
+generateSequentialCountMatrix <- function(numHyp, varNum, diffExp, nSamples = 5){
   
-  runningMatrix <- matrix()
-  condList <- c()
-  diffExpression <- c()
+  # numHyp: ?
+  # varNum: ?
+  # diffExp: ?
   
-  for (i in 1:numHyp){
+  # initialize a list of datasets over time
+  synthData <- list()
   
-  synthData <- generateSyntheticData(dataset = "B_625_625", n.vars = varNum, 
-                                   samples.per.cond = 5, n.diffexp = diffExp, 
-                                   repl.id = 1, seqdepth = 1e7, 
-                                   fraction.upregulated = 0.5, 
-                                   between.group.diffdisp = FALSE, 
-                                   filter.threshold.total = -1, 
-                                   filter.threshold.mediancpm = -1, 
-                                   fraction.non.overdispersed = 0, 
-                                   output.file = "OutputTestSynth.rds")
+  #describe your conditions
+  condVec <- c(rep("control", nSamples), rep("treatment", nSamples)) 
   
- diffExpression <- c(diffExpression, synthData@variable.annotations$differential.expression)
-  
-  condList <- c(condList, "C","C", "C", "C","C","T","T","T","T","T") 
-  if (i == 1){
-    runningMatrix <- synthData@count.matrix
+  for (i in seq_along(1:numHyp)){
+    
+    # you need a seed for reproducibility of simulated data
+    set.seed(i)
+    
+    synthData[[i]] <- generateSyntheticData(dataset = "B_625_625", 
+                                            n.vars = varNum, 
+                                            samples.per.cond = nSamples, 
+                                            n.diffexp = diffExp, 
+                                            repl.id = 1, 
+                                            seqdepth = 1e7, 
+                                            fraction.upregulated = 0.5, 
+                                            between.group.diffdisp = FALSE, 
+                                            filter.threshold.total = -1, # don't understand this
+                                            filter.threshold.mediancpm = -1, # don't understand this
+                                            fraction.non.overdispersed = 0, 
+                                            output.file = "OutputTestSynth.rds")
+    
+    colnames(synthData[[i]]@count.matrix) <- condVec
   }
-  else{
-     runningMatrix <- cbind(runningMatrix, synthData@count.matrix)
-     
-     
-      
-  }
- 
   
-  
-  
+  # unless you plan on providing a different diffExp for each simulated dataset,
+  # we only need to save once
+  diffExpressionVec <- synthData[[1]]@variable.annotations$differential.expression
+
+  list(countMatrix = synthData,
+       sampleCondition = condVec,
+       diffExpression = diffExpressionVec)
 }
+```
+
+```{r deseq_fct}
+DESeqPipeline <- function(countMatrix, conditions) {
   
-  for (i in 1 : dim(runningMatrix)[2]){
-       colnames(runningMatrix)[i] <- paste("sample", i, sep="")
-     }
+  colData <- data.frame(condition = conditions) %>%
+    mutate(condition = as.factor(condition))
   
+  ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, 
+                                          colData = colData, 
+                                          design = ~ condition)
   
+  dds <- DESeq(ddsFromMatrix)
+  res <- results(dds)
   
-  return(list("countMatrix" = runningMatrix, "sampleCondition" = condList, "diffExpression" = diffExpression))
- 
-  
+  resData <- merge(as.data.frame(res), as.data.frame(counts(dds, normalized = TRUE)), 
+                   by = 'row.names', 
+                   sort = FALSE)
+
+  resData
 }
+```
 
+```{r fdr_fct}
+control_offlineFDR <- function(pValueVec, diffExpVec, cutoff = 0.05, .method = "BH"){
+  # describe func args
 
-DESeqPipeline <- function(countMatrix, conditionList) {
+  adjP <- p.adjust(pValueVec, method = .method)
   
-  outputPrefix <- "SyntheticRNAData"
-sampleNames <- colnames(countMatrix)
-colData <- data.frame(condition = conditionList)
-treatments = c("C","T")
-ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, colData = colData, design = ~ condition)
-
-colData(ddsFromMatrix)$condition <- factor(colData(ddsFromMatrix)$condition, levels = treatments)
-
-dds <- DESeq(ddsFromMatrix)
-res <- results(dds)
-
-resData <- merge(as.data.frame(res), as.data.frame(counts(dds,normalized =TRUE)), by = 'row.names', sort = FALSE)
-
-
-
-return(resData)
-}
-
-
-offlineFDR <- function(pValueMatrix, diffExpMatrix, cutoff){
-adjP <- p.adjust(pValueMatrix, method="BH")
-positives <- 0
-fPositives <- 0
- 
-
-print(type(adjP[1]))
-
- for (i in 1:length(adjP)){
-  if (adjP[i])
-   if (adjP[i] < cutoff){
-     positives <- positives + 1
-     if (diffExpMatrix[i] == 0) {
-       fPositives <- fPositives + 1
-     }
-   }
- }
-
-fdr <- fPositives / positives
-return(fdr)
+  n_positives <- sum(adjP < cutoff, na.rm = TRUE)
+  n_true_positives <- sum((adjP < cutoff) & diffExpVec, na.rm = TRUE)
+  n_false_positives <- sum((adjP < cutoff) & (diffExpVec == 0), na.rm = TRUE)
+  fdr <- n_false_positives/n_positives
+  tibble(n_positives = n_positives,
+         n_true_positives = n_true_positives,
+         n_false_positives = n_false_positives,
+         fdr = fdr)
 }
 
 onlineFDR <- function(pValueMatrix, diff ExpMatrix, cutoff){
-adjP <- SAFFRON(pValueMatrix)
-positives <- 0
-fPositives <- 0
- 
-
-print(type(adjP[1]))
-
- for (i in 1:length(adjP)){
-  if (adjP[i])
-   if (adjP[i] < cutoff){
-     positives <- positives + 1
-     if (diffExpMatrix[i] == 0) {
-       fPositives <- fPositives + 1
-     }
-   }
- }
-
-fdr <- fPositives / positives
-return(fdr)
+  adjP <- SAFFRON(pValueMatrix)
+  positives <- 0
+  fPositives <- 0
+  
+  
+  print(type(adjP[1]))
+  
+  for (i in 1:length(adjP)){
+    if (adjP[i])
+      if (adjP[i] < cutoff){
+        positives <- positives + 1
+        if (diffExpMatrix[i] == 0) {
+          fPositives <- fPositives + 1
+        }
+      }
+  }
+  
+  fdr <- fPositives / positives
+  return(fdr)
 }
 
 ```
 
-
-
 ```{r}
-syntheticData <- generateSequentialCountMatrix(1, 12500, 1250)
-res <- DESeqPipeline(syntheticData$countMatrix, syntheticData$sampleCondition)
-offlineFDR(res$pvalue, syntheticData$diffExpression, 0.05)
-
+syntheticData <- generateSequentialCountMatrix(1, 1000, 100)
+res <- DESeqPipeline(syntheticData$countMatrix[[1]]@count.matrix, syntheticData$sampleCondition)
+control_offlineFDR(res$pvalue, syntheticData$diffExpression)
 ```
+You should look into a couple of things:
+
+* Why are there NAs in the res?
+* Why is the FDP 0.087? This is higher than our nominal threshold of 0.05
