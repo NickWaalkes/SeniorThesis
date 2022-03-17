@@ -1,0 +1,237 @@
+---
+title: "RNASeqPipeline3"
+author: "Nick Waalkes"
+date: "2/3/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load libraries
+library(DESeq2)
+library(onlineFDR)
+library(seqgendiff)
+library(compcodeR)
+library(tidyverse)
+
+my_alpha <- 0.05
+n_samples <- 50
+n_batches <- 15
+n_in_batch <- 10000
+pi_de <- 0.1
+```
+
+
+```{r simulate_data_fct}
+generateData <- function(numHyp, diffRat, repID, nSamples = n_samples){
+  
+
+  # numHyp: Number of hypotheses tested for this dataset
+  # diffExp: Number of hypotheses that are truly differentially expressed in the treatment condition
+  # nSamples: Number of each experimental condition (control and treatment)
+  
+  #Create a vector that describes experimental conditions. In this case, control and treatment
+  condVec <- c(rep("control", nSamples), rep("treatment", nSamples)) 
+  
+
+    # Set seed for simulated data reproducability. Only uncomment if running final analysis that will be featured in thesis           paper or presentation
+    #set.seed(i)
+    
+    # Create synthObject, an object that contains the count matrix, differential expression matrix, and other info about the          synthetic data. This simulated data is based on the mean and variance estimates from data in Pickrell et al (2010) and          Cheung et al (2010). For more detail regarding the data simulation process, review Soneson and Delorenzi (2013).             
+    # Important notes about the inputs of this function: fraction.upregulated represents what fraction of the differentially          expressed genes are upregulated (treatment mean count is higher than sample mean count for that gene). Keeping this close       to a half is important. At the extremes of up- or downregulation both offline and online control mechanisms begin to break       due to weirdness of DEA. Luckily, this seems to line up rather effectively with the reality of most treatment conditions.       Additionally, in real world circumstances a significant tilt in regulation will be able to be seen in the data, and thus        can be expected before any analysis is done.
+  
+  synthObject <- generateSyntheticData(dataset = "B_625_625", 
+                                       n.vars = numHyp, 
+                                       samples.per.cond = nSamples, 
+                                       n.diffexp = numHyp*diffRat, 
+                                       repl.id = repID, 
+                                       seqdepth = 1e7, 
+                                       fraction.upregulated = 0.5, 
+                                       between.group.diffdisp = FALSE, 
+                                       filter.threshold.total = 1, 
+                                       filter.threshold.mediancpm = 0, 
+                                       fraction.non.overdispersed = 0, 
+                                       output.file = "OutputTestSynth.rds")
+  
+    # Add column headers with the experimental conditions so that the differential expression understands which columns are           control and treatment.
+  colnames(synthObject@count.matrix) <- condVec
+  
+  # Create a vector that contains which genes are differentially expressed by index. 1 if differentially expressed and 0 if not.
+#  diffExpressionDf <- synthObject@variable.annotations %>%
+#    mutate(gene_id = paste0("g", row_number()))
+  # Save the generated count matrix as synthData
+#  synthData <- synthObject@count.matrix
+#  rownames(synthData) <- paste0("g",seq(numHyp))
+  # Return a list that contains the count matrix, sample conditions, and differential expression vector
+  synthObject@variable.annotations['Row.names'] <- paste0('g',seq(from=1,to=length(synthObject@variable.annotations$differential.expression)))
+  return(synthObject)
+}
+```
+
+```{r deseq_fct}
+DESeqPipeline <- function(countMatrix, conditions) {
+  
+  colData <- data.frame(condition = conditions) %>%
+    mutate(condition = as.factor(condition))
+  
+  ddsFromMatrix <- DESeqDataSetFromMatrix(countData = countMatrix, 
+                                          colData = colData, 
+                                          design = ~ condition)
+  
+  dds <- DESeq(ddsFromMatrix)
+  res <- results(dds)
+  
+  #left_join
+  resData <- merge(as.data.frame(res), as.data.frame(counts(dds, normalized = TRUE)), 
+                   by = 'row.names', 
+                   sort = FALSE)
+  resData
+}
+```
+
+```{r}
+uncontrolledFDR <- function(unconDf, cutoff=0.05){
+  n_positives <- sum(unconDf$pvalue < cutoff, na.rm = TRUE)
+  n_true_positives <- sum((unconDf$pvalue < cutoff) & (unconDf$differential.expression==1), na.rm=TRUE)
+  n_false_positives <- sum((unconDf$pvalue < cutoff) & (unconDf$differential.expression==0), na.rm=TRUE)
+  fdr <- n_false_positives/n_positives
+  power <- n_true_positives/sum(unconDf$differential.expression == 1)
+  tibble(n_positives = n_positives,
+         n_true_positives = n_true_positives,
+         n_false_positives = n_false_positives,
+         fdr = fdr,
+         power = power)
+}
+
+control_offlineFDR <- function(unconDf, cutoff = 0.05, .method = "BH"){
+  #pValueVec is the vector of raw p-values
+  #diffExpVec is the differential expression vector for each corresponding p-value
+  #cutoff is the nominal cutoff
+
+  adjP <- p.adjust(unconDf$pvalue, method = .method)
+  n_positives <- sum(adjP < cutoff, na.rm = TRUE)
+  n_true_positives <- sum((adjP < cutoff) & (unconDf$differential.expression==1), na.rm=TRUE)
+  n_false_positives <- sum((adjP < cutoff) & (unconDf$differential.expression==0), na.rm=TRUE)
+  fdr <- n_false_positives/n_positives
+  power <- n_true_positives/sum(unconDf$differential.expression == 1)
+  tibble(n_positives = n_positives,
+         n_true_positives = n_true_positives,
+         n_false_positives = n_false_positives,
+         fdr = fdr,
+         power = power)
+}
+
+
+control_onlineFDR <- function(unconDf, cutoff=0.05){
+  #This is set up very similarly the offline control function. But SAFFRON generates cutoffs rather than adjusted p-values, slightly altering the boolean checks
+  unconDf <- drop_na(unconDf)
+  saffron_res <- SAFFRON(unconDf, alpha=cutoff)
+  n_positives <- sum(saffron_res$R)
+  n_true_positives <- sum(saffron_res$R & unconDf$differential.expression==1, na.rm = TRUE)
+  n_false_positives <- sum(saffron_res$R & unconDf$differential.expression==0, na.rm = TRUE)
+  fdr <- n_false_positives/n_positives
+  power <- n_true_positives/sum(unconDf$differential.expression==1)
+  tibble(n_positives = n_positives,
+         n_true_positives = n_true_positives,
+         n_false_positives = n_false_positives,
+         fdr = fdr,
+         power = power)
+}
+```
+
+```{r generate_results}
+generate_results <- function(.numHyp, .diffRat, .repID){
+mainDf <- data.frame()
+
+
+#P-Value Generation
+dataDf <- data.frame()
+
+numHyp <- .numHyp
+diffRat <- .diffRat
+repID <- .repID
+
+dataObj <- generateData(numHyp, diffRat, repID)
+deRes <- DESeqPipeline(dataObj@count.matrix, dataObj@sample.annotations$condition)
+
+mainDf <- merge(dataObj@variable.annotations, deRes, by='Row.names')
+
+return(mainDf)
+}
+```
+
+```{r cmd_seq}
+#This is the block of code that needs to be run to actually conduct the analysis
+
+de_res <- list()
+noFDR <- c()
+noPower <- c()
+onlineFDR <- c()
+onlinePower <- c()
+offlineFDR <- c()
+offlinePower <- c()
+#These parameters are extremely important. runs is the number of times we simulate, numHyp is the number of hypotheses per family, numDiff is the number of those hypotheses that are differentially expressed, and numFam is the number of families per simulation (essentially, the number of times that we append data and run control again.)
+runs <- 15
+numHyp <- 1000
+diffRat <- 0.1
+repID <- 2141223467
+#Each time we run generate_results(), we get a data frame with all of the relevant information. Across the runs, we append the newly generated data frame, currentRun, to sumDf.
+for(i in 1:runs){
+  de_res[[i]] <- generate_results(numHyp, diffRat, repID) %>%
+    mutate(batch = i)
+  repID <- repID + i
+}
+
+finalRes <- dplyr::bind_rows(de_res) %>%
+  select(pvalue, differential.expression, batch, Row.names)
+
+for (i in 1:runs){
+  
+  noRes <- uncontrolledFDR(filter(finalRes, batch==i))
+  offRes <- control_offlineFDR(filter(finalRes, batch==i))
+  onRes <- control_onlineFDR(filter(finalRes, batch<=i))
+  
+  noFDR <- c(noFDR, noRes$fdr)
+  noPower <- c(noPower, noRes$power)
+  offlineFDR <- c(offlineFDR, offRes$fdr)
+  offlinePower <- c(offlinePower, offRes$power)
+  onlineFDR <- c(onlineFDR, onRes$fdr)
+  onlinePower <- c(onlinePower, onRes$power)
+}
+
+
+data.frame(noFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(noFDR),by=1), y = noFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noFDR))
+
+data.frame(noPower) %>%
+  ggplot(aes(x=seq(from=1,to=length(noPower),by=1), y = noPower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noPower))
+
+
+data.frame(offlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlineFDR),by=1), y = offlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlineFDR))
+
+data.frame(offlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlinePower),by=1), y = offlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlinePower))
+ 
+ 
+data.frame(onlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlineFDR),by=1), y = onlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlineFDR))
+
+data.frame(onlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlinePower),by=1), y = onlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlinePower))
+ 
+
+```
