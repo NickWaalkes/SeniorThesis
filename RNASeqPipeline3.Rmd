@@ -16,8 +16,8 @@ library(compcodeR)
 library(tidyverse)
 
 my_alpha <- 0.05
-n_samples <- 50
-n_batches <- 15
+n_samples <- 15
+n_batches <- 10
 n_in_batch <- 10000
 pi_de <- 0.1
 ```
@@ -41,7 +41,7 @@ generateData <- function(numHyp, diffRat, repID, nSamples = n_samples){
     # Create synthObject, an object that contains the count matrix, differential expression matrix, and other info about the          synthetic data. This simulated data is based on the mean and variance estimates from data in Pickrell et al (2010) and          Cheung et al (2010). For more detail regarding the data simulation process, review Soneson and Delorenzi (2013).             
     # Important notes about the inputs of this function: fraction.upregulated represents what fraction of the differentially          expressed genes are upregulated (treatment mean count is higher than sample mean count for that gene). Keeping this close       to a half is important. At the extremes of up- or downregulation both offline and online control mechanisms begin to break       due to weirdness of DEA. Luckily, this seems to line up rather effectively with the reality of most treatment conditions.       Additionally, in real world circumstances a significant tilt in regulation will be able to be seen in the data, and thus        can be expected before any analysis is done.
   
-  synthObject <- generateSyntheticData(dataset = "B_625_625", 
+  synthObject <- generateSyntheticData(dataset = paste0("sim", repID, "-", diffRat), 
                                        n.vars = numHyp, 
                                        samples.per.cond = nSamples, 
                                        n.diffexp = numHyp*diffRat, 
@@ -164,6 +164,9 @@ return(mainDf)
 ```{r cmd_seq}
 #This is the block of code that needs to be run to actually conduct the analysis
 
+repID <- 14286126841
+aggRes <- list()
+for (j in 1:15){
 de_res <- list()
 noFDR <- c()
 noPower <- c()
@@ -171,12 +174,16 @@ onlineFDR <- c()
 onlinePower <- c()
 offlineFDR <- c()
 offlinePower <- c()
+finalRes <- data.frame()
 #These parameters are extremely important. runs is the number of times we simulate, numHyp is the number of hypotheses per family, numDiff is the number of those hypotheses that are differentially expressed, and numFam is the number of families per simulation (essentially, the number of times that we append data and run control again.)
-runs <- 15
+runs <- 20
 numHyp <- 1000
 diffRat <- 0.1
-repID <- 2141223467
+ 
 #Each time we run generate_results(), we get a data frame with all of the relevant information. Across the runs, we append the newly generated data frame, currentRun, to sumDf.
+
+
+
 for(i in 1:runs){
   de_res[[i]] <- generate_results(numHyp, diffRat, repID) %>%
     mutate(batch = i)
@@ -199,7 +206,9 @@ for (i in 1:runs){
   onlineFDR <- c(onlineFDR, onRes$fdr)
   onlinePower <- c(onlinePower, onRes$power)
 }
-
+aggRes[j] <- list(data.frame(noFDR, noPower, offlineFDR, offlinePower, onlineFDR, onlinePower))
+}
+save(finalRes, file=paste0('finalRes1agg')
 
 data.frame(noFDR) %>%
   ggplot(aes(x=seq(from=1,to=length(noFDR),by=1), y = noFDR)) + 
@@ -234,4 +243,270 @@ data.frame(onlinePower) %>%
   geom_hline(yintercept=mean(onlinePower))
  
 
+```
+
+```{r cmd_seq}
+#This is the block of code that needs to be run to actually conduct the analysis
+
+de_res <- list()
+noFDR <- c()
+noPower <- c()
+onlineFDR <- c()
+onlinePower <- c()
+offlineFDR <- c()
+offlinePower <- c()
+#These parameters are extremely important. runs is the number of times we simulate, numHyp is the number of hypotheses per family, numDiff is the number of those hypotheses that are differentially expressed, and numFam is the number of families per simulation (essentially, the number of times that we append data and run control again.)
+runs <- 30
+numHyp <- 1000
+diffRat <- 0.5
+repID <- 032020221139 
+#Each time we run generate_results(), we get a data frame with all of the relevant information. Across the runs, we append the newly generated data frame, currentRun, to sumDf.
+for(i in 1:runs){
+  de_res[[i]] <- generate_results(numHyp, diffRat, repID) %>%
+    mutate(batch = i)
+  repID <- repID + i
+}
+
+finalRes <- dplyr::bind_rows(de_res) %>%
+  select(pvalue, differential.expression, batch, Row.names)
+
+for (i in 1:runs){
+  
+  noRes <- uncontrolledFDR(filter(finalRes, batch==i))
+  offRes <- control_offlineFDR(filter(finalRes, batch==i))
+  onRes <- control_onlineFDR(filter(finalRes, batch<=i))
+  
+  noFDR <- c(noFDR, noRes$fdr)
+  noPower <- c(noPower, noRes$power)
+  offlineFDR <- c(offlineFDR, offRes$fdr)
+  offlinePower <- c(offlinePower, offRes$power)
+  onlineFDR <- c(onlineFDR, onRes$fdr)
+  onlinePower <- c(onlinePower, onRes$power)
+}
+
+save(finalRes, file=paste0('finalRes2')
+
+data.frame(noFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(noFDR),by=1), y = noFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noFDR))
+
+data.frame(noPower) %>%
+  ggplot(aes(x=seq(from=1,to=length(noPower),by=1), y = noPower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noPower))
+
+
+data.frame(offlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlineFDR),by=1), y = offlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlineFDR))
+
+data.frame(offlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlinePower),by=1), y = offlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlinePower))
+ 
+ 
+data.frame(onlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlineFDR),by=1), y = onlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlineFDR))
+
+data.frame(onlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlinePower),by=1), y = onlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlinePower))
+ 
+
+```
+
+```{r cmd_seq}
+#This is the block of code that needs to be run to actually conduct the analysis
+aggRes3 <- list()
+repID <- 032020221144 
+for(j in 1:8){
+de_res <- list()
+noFDR <- c()
+noPower <- c()
+onlineFDR <- c()
+onlinePower <- c()
+offlineFDR <- c()
+offlinePower <- c()
+#These parameters are extremely important. runs is the number of times we simulate, numHyp is the number of hypotheses per family, numDiff is the number of those hypotheses that are differentially expressed, and numFam is the number of families per simulation (essentially, the number of times that we append data and run control again.)
+runs <- 50
+numHyp <- 1000
+diffRat <- 0.5
+
+#Each time we run generate_results(), we get a data frame with all of the relevant information. Across the runs, we append the newly generated data frame, currentRun, to sumDf.
+for(i in 1:runs){
+  if(i < 10){
+  de_res[[i]] <- generate_results(numHyp, diffRat, repID) %>%
+    mutate(batch = i)
+  }
+  else{
+    de_res[[i]] <- generate_results(numHyp, 0.1, repID) %>%
+    mutate(batch = i)
+  }
+  repID <- repID + i
+}
+
+finalRes <- dplyr::bind_rows(de_res) %>%
+  select(pvalue, differential.expression, batch, Row.names)
+
+for (i in 1:runs){
+  
+  noRes <- uncontrolledFDR(filter(finalRes, batch==i))
+  offRes <- control_offlineFDR(filter(finalRes, batch==i))
+  onRes <- control_onlineFDR(filter(finalRes, batch<=i))
+  
+  noFDR <- c(noFDR, noRes$fdr)
+  noPower <- c(noPower, noRes$power)
+  offlineFDR <- c(offlineFDR, offRes$fdr)
+  offlinePower <- c(offlinePower, offRes$power)
+  onlineFDR <- c(onlineFDR, onRes$fdr)
+  onlinePower <- c(onlinePower, onRes$power)
+}
+aggRes3[j] <- list(data.frame(noFDR, noPower, offlineFDR, offlinePower, onlineFDR, onlinePower))
+}
+save(aggRes3, file='aggfinalRes3')
+
+data.frame(noFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(noFDR),by=1), y = noFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noFDR))
+
+data.frame(noPower) %>%
+  ggplot(aes(x=seq(from=1,to=length(noPower),by=1), y = noPower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(noPower))
+
+
+data.frame(offlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlineFDR),by=1), y = offlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlineFDR))
+
+data.frame(offlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(offlinePower),by=1), y = offlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(offlinePower))
+ 
+ 
+data.frame(onlineFDR) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlineFDR),by=1), y = onlineFDR)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlineFDR))
+
+data.frame(onlinePower) %>%
+  ggplot(aes(x=seq(from=1,to=length(onlinePower),by=1), y = onlinePower)) + 
+  geom_point() +
+  geom_hline(yintercept=mean(onlinePower))
+ 
+
+```
+
+```{r}
+totalDf <- data.frame()
+for (i in 1:15){
+aggRes[[i]]$batch <- 1:20
+}
+
+for (i in 1:15){
+totalDf <- rbind(totalDf, aggRes[[i]])
+} 
+```
+
+```{r}
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = noPower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = noPower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power')
+
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = offlineFDR)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = offlinePower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power')
+
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = onlineFDR)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf) %>%
+  ggplot(aes(x=batch, y = onlinePower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power')
+```
+
+```{r}
+totalDf3 <- data.frame()
+for (i in 1:8){
+aggRes3[[i]]$batch <- 1:50
+}
+
+for (i in 1:8){
+totalDf3 <- rbind(totalDf3, aggRes3[[i]])
+} 
+```
+
+```{r}
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = noPower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = noPower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power')
+
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = offlineFDR)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = offlinePower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power')
+
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = onlineFDR)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='FDR') +
+  geom_hline(yintercept=0.05, col='red')
+
+data.frame(totalDf3) %>%
+  ggplot(aes(x=batch, y = onlinePower)) +
+  geom_smooth() +
+  geom_point() +
+  labs(x = 'Batch', y='Power') +
+  theme_gray(base_size=20)
 ```
